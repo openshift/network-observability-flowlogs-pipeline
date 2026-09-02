@@ -19,7 +19,7 @@ RUN go build -tags strictfipsruntime -ldflags "-X 'main.BuildVersion=$BUILDVERSI
 RUN go build -tags strictfipsruntime -ldflags "-X 'main.BuildVersion=$BUILDVERSION' -X 'main.BuildDate=`date +%Y-%m-%d\ %H:%M`'" "./cmd/flp-informers"
 
 # final stage
-FROM registry.redhat.io/ubi9/ubi-minimal-pqc:9.8-1787014983
+FROM registry.redhat.io/ubi9/ubi-minimal-pqc:9.8-1788217333
 ARG BUILDVERSION
 ARG BUILDVERSION_Y
 
