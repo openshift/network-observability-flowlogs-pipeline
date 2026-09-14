@@ -32,5 +32,8 @@
         "matchManagers": ["pip_requirements"]
       }
     ]
+  },
+  "github-actions": {
+    "enabled": false
   }
 }
