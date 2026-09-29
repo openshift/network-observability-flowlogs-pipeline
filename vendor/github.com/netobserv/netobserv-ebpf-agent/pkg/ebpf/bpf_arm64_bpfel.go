@@ -206,6 +206,26 @@ type BpfPktDropMetricsT struct {
 	_               [3]byte
 }
 
+type BpfQuicConfigT uint32
+
+const (
+	BpfQuicConfigTQUIC_CONFIG_DISABLED     BpfQuicConfigT = 0
+	BpfQuicConfigTQUIC_CONFIG_ENABLED      BpfQuicConfigT = 1
+	BpfQuicConfigTQUIC_CONFIG_ANY_UDP_PORT BpfQuicConfigT = 2
+)
+
+type BpfQuicMetrics BpfQuicMetricsT
+
+type BpfQuicMetricsT struct {
+	_               structs.HostLayout
+	StartMonoTimeTs uint64
+	EndMonoTimeTs   uint64
+	Version         uint32
+	EthProtocol     uint16
+	SeenLongHdr     uint8
+	SeenShortHdr    uint8
+}
+
 type BpfSslDataEventT struct {
 	_           structs.HostLayout
 	TimestampNs uint64
@@ -246,6 +266,68 @@ type BpfXlatMetricsT struct {
 	EthProtocol     uint16
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	BpfMapAdditionalFlowMetrics          = "additional_flow_metrics"
+	BpfMapAggregatedFlows                = "aggregated_flows"
+	BpfMapAggregatedFlowsDns             = "aggregated_flows_dns"
+	BpfMapAggregatedFlowsNetworkEvents   = "aggregated_flows_network_events"
+	BpfMapAggregatedFlowsPktDrop         = "aggregated_flows_pkt_drop"
+	BpfMapAggregatedFlowsXlat            = "aggregated_flows_xlat"
+	BpfMapDirectFlows                    = "direct_flows"
+	BpfMapDnsFlows                       = "dns_flows"
+	BpfMapDnsNameMap                     = "dns_name_map"
+	BpfMapFilterMap                      = "filter_map"
+	BpfMapGlobalCounters                 = "global_counters"
+	BpfMapIpsecEgressMap                 = "ipsec_egress_map"
+	BpfMapIpsecIngressMap                = "ipsec_ingress_map"
+	BpfMapPacketRecord                   = "packet_record"
+	BpfMapPeerFilterMap                  = "peer_filter_map"
+	BpfMapQuicFlows                      = "quic_flows"
+	BpfMapSslDataEventMap                = "ssl_data_event_map"
+	BpfProgKfreeSkb                      = "kfree_skb"
+	BpfProgNetworkEventsMonitoring       = "network_events_monitoring"
+	BpfProgProbeEntrySSL_write           = "probe_entry_SSL_write"
+	BpfProgTcEgressFlowParse             = "tc_egress_flow_parse"
+	BpfProgTcEgressPcaParse              = "tc_egress_pca_parse"
+	BpfProgTcIngressFlowParse            = "tc_ingress_flow_parse"
+	BpfProgTcIngressPcaParse             = "tc_ingress_pca_parse"
+	BpfProgTcpRcvFentry                  = "tcp_rcv_fentry"
+	BpfProgTcpRcvKprobe                  = "tcp_rcv_kprobe"
+	BpfProgTcxEgressFlowParse            = "tcx_egress_flow_parse"
+	BpfProgTcxEgressPcaParse             = "tcx_egress_pca_parse"
+	BpfProgTcxIngressFlowParse           = "tcx_ingress_flow_parse"
+	BpfProgTcxIngressPcaParse            = "tcx_ingress_pca_parse"
+	BpfProgTrackNatManipPkt              = "track_nat_manip_pkt"
+	BpfProgXfrmInputKprobe               = "xfrm_input_kprobe"
+	BpfProgXfrmInputKretprobe            = "xfrm_input_kretprobe"
+	BpfProgXfrmOutputKprobe              = "xfrm_output_kprobe"
+	BpfProgXfrmOutputKretprobe           = "xfrm_output_kretprobe"
+	BpfVarDnsPort                        = "dns_port"
+	BpfVarEnableDirectflowsRingbuf       = "enable_directflows_ringbuf"
+	BpfVarEnableDnsTracking              = "enable_dns_tracking"
+	BpfVarEnableFlowsFiltering           = "enable_flows_filtering"
+	BpfVarEnableIpsec                    = "enable_ipsec"
+	BpfVarEnableNetworkEventsMonitoring  = "enable_network_events_monitoring"
+	BpfVarEnableOpensslTracking          = "enable_openssl_tracking"
+	BpfVarEnablePca                      = "enable_pca"
+	BpfVarEnablePktTranslationTracking   = "enable_pkt_translation_tracking"
+	BpfVarEnableQuicTracking             = "enable_quic_tracking"
+	BpfVarEnableRtt                      = "enable_rtt"
+	BpfVarEnableTlsUsageTracking         = "enable_tls_usage_tracking"
+	BpfVarFilterKey                      = "filter_key"
+	BpfVarFilterValue                    = "filter_value"
+	BpfVarHasFilterSampling              = "has_filter_sampling"
+	BpfVarNetworkEventsMonitoringGroupid = "network_events_monitoring_groupid"
+	BpfVarSampling                       = "sampling"
+	BpfVarSslDataEvent                   = "ssl_data_event"
+	BpfVarTraceMessages                  = "trace_messages"
+	BpfVarUnused8                        = "unused8"
+	BpfVarUnused9                        = "unused9"
+)
+
 // LoadBpf returns the embedded CollectionSpec for Bpf.
 func LoadBpf() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_BpfBytes)
@@ -266,7 +348,7 @@ func LoadBpf() (*ebpf.CollectionSpec, error) {
 //	*BpfMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func LoadBpfObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func LoadBpfObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := LoadBpf()
 	if err != nil {
 		return err
@@ -327,6 +409,7 @@ type BpfMapSpecs struct {
 	IpsecIngressMap              *ebpf.MapSpec `ebpf:"ipsec_ingress_map"`
 	PacketRecord                 *ebpf.MapSpec `ebpf:"packet_record"`
 	PeerFilterMap                *ebpf.MapSpec `ebpf:"peer_filter_map"`
+	QuicFlows                    *ebpf.MapSpec `ebpf:"quic_flows"`
 	SslDataEventMap              *ebpf.MapSpec `ebpf:"ssl_data_event_map"`
 }
 
@@ -343,6 +426,7 @@ type BpfVariableSpecs struct {
 	EnableOpensslTracking          *ebpf.VariableSpec `ebpf:"enable_openssl_tracking"`
 	EnablePca                      *ebpf.VariableSpec `ebpf:"enable_pca"`
 	EnablePktTranslationTracking   *ebpf.VariableSpec `ebpf:"enable_pkt_translation_tracking"`
+	EnableQuicTracking             *ebpf.VariableSpec `ebpf:"enable_quic_tracking"`
 	EnableRtt                      *ebpf.VariableSpec `ebpf:"enable_rtt"`
 	EnableTlsUsageTracking         *ebpf.VariableSpec `ebpf:"enable_tls_usage_tracking"`
 	FilterKey                      *ebpf.VariableSpec `ebpf:"filter_key"`
@@ -391,6 +475,7 @@ type BpfMaps struct {
 	IpsecIngressMap              *ebpf.Map `ebpf:"ipsec_ingress_map"`
 	PacketRecord                 *ebpf.Map `ebpf:"packet_record"`
 	PeerFilterMap                *ebpf.Map `ebpf:"peer_filter_map"`
+	QuicFlows                    *ebpf.Map `ebpf:"quic_flows"`
 	SslDataEventMap              *ebpf.Map `ebpf:"ssl_data_event_map"`
 }
 
@@ -411,6 +496,7 @@ func (m *BpfMaps) Close() error {
 		m.IpsecIngressMap,
 		m.PacketRecord,
 		m.PeerFilterMap,
+		m.QuicFlows,
 		m.SslDataEventMap,
 	)
 }
@@ -428,6 +514,7 @@ type BpfVariables struct {
 	EnableOpensslTracking          *ebpf.Variable `ebpf:"enable_openssl_tracking"`
 	EnablePca                      *ebpf.Variable `ebpf:"enable_pca"`
 	EnablePktTranslationTracking   *ebpf.Variable `ebpf:"enable_pkt_translation_tracking"`
+	EnableQuicTracking             *ebpf.Variable `ebpf:"enable_quic_tracking"`
 	EnableRtt                      *ebpf.Variable `ebpf:"enable_rtt"`
 	EnableTlsUsageTracking         *ebpf.Variable `ebpf:"enable_tls_usage_tracking"`
 	FilterKey                      *ebpf.Variable `ebpf:"filter_key"`

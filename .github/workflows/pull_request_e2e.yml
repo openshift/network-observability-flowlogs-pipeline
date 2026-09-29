@@ -1,0 +1,29 @@
+name: pull request - e2e tests
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-tests:
+    name: e2e-tests
+    runs-on: ubuntu-latest
+        
+    steps:
+    - name: install make
+      run: sudo apt-get install make
+    - name: set up go 1.x
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      with:
+        go-version: '1.26'
+    - name: checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      with:
+        persist-credentials: false
+    - name: run build
+      run: make build
+    - name: run end-to-end tests
+      run: make tests-e2e

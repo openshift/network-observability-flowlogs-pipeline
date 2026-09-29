@@ -1,20 +1,3 @@
-/*
- * Copyright (C) 2022 IBM, Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- */
-
 package informers
 
 import (
@@ -121,6 +104,51 @@ func TestGetInfo(t *testing.T) {
 	// Test no match
 	info = kubeData.IndexLookup(nil, "1.2.3.200")
 	require.Nil(t, info)
+}
+
+// TestGetInfo_TerminatedPodContention checks that a live Pod wins a reused IP over a
+// terminated one, while a terminated Pod is still returned when no live Pod owns the IP.
+func TestGetInfo_TerminatedPodContention(t *testing.T) {
+	metrics := operational.NewMetrics(&config.MetricsSettings{})
+	kubeData := Informers{indexerHitMetric: metrics.CreateIndexerHitCounter()}
+	pidx, hidx, sidx, ridx := SetupIndexerMocks(&kubeData)
+	ridx.FallbackNotFound()
+
+	// A completed pod (e.g. TaskRun) and a running pod both hold 1.2.3.4;
+	// the terminated one is returned first by the index.
+	pidx.MockPodsForIP("1.2.3.4",
+		model.ResourceMetaData{
+			ObjectMeta: metav1.ObjectMeta{Name: "old-taskrun-pod", Namespace: "podNamespace"},
+			OwnerName:  "old-taskrun-pod", OwnerKind: "Pod", HostIP: "10.0.0.1", Terminated: true,
+		},
+		model.ResourceMetaData{
+			ObjectMeta: metav1.ObjectMeta{Name: "running-pod", Namespace: "podNamespace"},
+			OwnerName:  "running-pod", OwnerKind: "Pod", HostIP: "10.0.0.1",
+		},
+	)
+	// A terminated pod with no live contender still keeps its IP.
+	pidx.MockPodsForIP("1.2.3.5",
+		model.ResourceMetaData{
+			ObjectMeta: metav1.ObjectMeta{Name: "lonely-terminated-pod", Namespace: "podNamespace"},
+			OwnerName:  "lonely-terminated-pod", OwnerKind: "Pod", HostIP: "10.0.0.1", Terminated: true,
+		},
+	)
+	pidx.FallbackNotFound()
+	sidx.FallbackNotFound()
+	hidx.MockNode("10.0.0.1", "node1")
+	hidx.FallbackNotFound()
+
+	// Live pod wins the reused IP
+	info := kubeData.IndexLookup(nil, "1.2.3.4")
+	require.NotNil(t, info)
+	require.Equal(t, "running-pod", info.Name)
+	require.False(t, info.Terminated)
+
+	// Terminated pod is still returned when it is the only match
+	info = kubeData.IndexLookup(nil, "1.2.3.5")
+	require.NotNil(t, info)
+	require.Equal(t, "lonely-terminated-pod", info.Name)
+	require.True(t, info.Terminated)
 }
 
 // TestOwnershipTracking_GatewayAPI tests the ownership chain: Pod → ReplicaSet → Deployment → Gateway
@@ -238,4 +266,32 @@ func TestOwnershipTracking_MaxDepth(t *testing.T) {
 	require.NotNil(t, info)
 	require.Equal(t, "Gateway", info.OwnerKind)
 	require.Equal(t, "gateway1", info.OwnerName)
+}
+
+func TestStop(t *testing.T) {
+	inf := &Informers{}
+	inf.stopChan = make(chan struct{})
+	inf.mdStopChan = make(chan struct{})
+
+	// Test calling Stop closes both channels
+	inf.Stop()
+
+	// Verify stopChan is closed
+	select {
+	case <-inf.stopChan:
+		// Channel is closed, good
+	default:
+		t.Fatal("stopChan should be closed after Stop()")
+	}
+
+	// Verify mdStopChan is closed
+	select {
+	case <-inf.mdStopChan:
+		// Channel is closed, good
+	default:
+		t.Fatal("mdStopChan should be closed after Stop()")
+	}
+
+	// Test calling Stop again is idempotent (doesn't panic)
+	inf.Stop()
 }

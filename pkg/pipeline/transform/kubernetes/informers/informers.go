@@ -1,20 +1,3 @@
-/*
- * Copyright (C) 2021 IBM, Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- */
-
 package informers
 
 import (
@@ -54,6 +37,7 @@ type Interface interface {
 	IndexLookup([]string, string) *model.ResourceMetaData
 	GetNodeByName(string) (*model.ResourceMetaData, error)
 	InitFromConfig(string, *Config, *operational.Metrics) error
+	GetAllResources() []*model.ResourceMetaData
 }
 
 type Informers struct {
@@ -123,6 +107,23 @@ func (k *Informers) increaseIndexerHits(kind, namespace, network, warn string) {
 	k.indexerHitMetric.WithLabelValues(kind, namespace, network, warn).Inc()
 }
 
+// preferLive picks the object to return among several sharing the same index key.
+// It returns the first non-terminated object. The returned bool is true when the choice was ambiguous, i.e. there was
+// no live winner and several terminated candidates to pick from arbitrarily.
+func preferLive(objs []interface{}) (*model.ResourceMetaData, bool) {
+	var fallback *model.ResourceMetaData
+	for _, o := range objs {
+		info := o.(*model.ResourceMetaData)
+		if !info.Terminated {
+			return info, false
+		}
+		if fallback == nil {
+			fallback = info
+		}
+	}
+	return fallback, len(objs) > 1
+}
+
 func (k *Informers) infoForCustomKeys(idx cache.Indexer, kind string, potentialKeys []string) (*model.ResourceMetaData, bool) {
 	for _, key := range potentialKeys {
 		objs, err := idx.ByIndex(IndexCustom, key)
@@ -132,11 +133,11 @@ func (k *Informers) infoForCustomKeys(idx cache.Indexer, kind string, potentialK
 			return nil, false
 		}
 		if len(objs) > 0 {
-			info := objs[0].(*model.ResourceMetaData)
+			info, ambiguous := preferLive(objs)
 			info.NetworkName = info.SecondaryNetNames[key]
-			if len(objs) > 1 {
+			if ambiguous {
 				k.increaseIndexerHits(kind, info.Namespace, info.NetworkName, "multiple matches")
-				log.WithField("key", key).Debugf("found %d objects matching this key, returning first", len(objs))
+				log.WithField("key", key).Debugf("found %d terminated objects matching this key and no live one, returning first", len(objs))
 			} else {
 				k.increaseIndexerHits(kind, info.Namespace, info.NetworkName, "")
 			}
@@ -155,11 +156,11 @@ func (k *Informers) infoForIP(idx cache.Indexer, kind string, ip string) (*model
 		return nil, false
 	}
 	if len(objs) > 0 {
-		info := objs[0].(*model.ResourceMetaData)
+		info, ambiguous := preferLive(objs)
 		info.NetworkName = "primary"
-		if len(objs) > 1 {
+		if ambiguous {
 			k.increaseIndexerHits(kind, info.Namespace, "primary", "multiple matches")
-			log.WithField("ip", ip).Debugf("found %d objects matching this IP, returning first", len(objs))
+			log.WithField("ip", ip).Debugf("found %d terminated objects matching this IP and no live one, returning first", len(objs))
 		} else {
 			k.increaseIndexerHits(kind, info.Namespace, "primary", "")
 		}
@@ -416,6 +417,7 @@ func (k *Informers) initPodInformer(informerFactory inf.SharedInformerFactory, c
 			SecondaryNetKeys:  flatKeys,
 			SecondaryNetNames: namedKeys,
 			IPs:               ips,
+			Terminated:        pod.Status.Phase == v1.PodSucceeded || pod.Status.Phase == v1.PodFailed,
 		}
 		if len(pod.OwnerReferences) > 0 {
 			obj.OwnerKind = pod.OwnerReferences[0].Kind
@@ -606,6 +608,65 @@ func (k *Informers) initInformers(client kubernetes.Interface, metaClient metada
 	metadataInformerFactory.WaitForCacheSync(k.mdStopChan)
 	log.Debugf("kubernetes metadata informers started")
 	return nil
+}
+
+// Stop gracefully stops the Kubernetes informers by closing the stop channels.
+// This signals the informer factories to stop watching for changes.
+// This method is idempotent - it's safe to call multiple times.
+func (k *Informers) Stop() {
+	// Close stopChan if not already closed
+	select {
+	case <-k.stopChan:
+		// Already closed
+	default:
+		close(k.stopChan)
+	}
+
+	// Close mdStopChan if not already closed
+	select {
+	case <-k.mdStopChan:
+		// Already closed
+	default:
+		close(k.mdStopChan)
+	}
+
+	log.Info("Kubernetes informers stopped")
+}
+
+// GetAllResources returns all cached resources (pods, nodes, services) as a snapshot.
+// This is used to send initial snapshots to processors when they connect or restart.
+func (k *Informers) GetAllResources() []*model.ResourceMetaData {
+	var allResources []*model.ResourceMetaData
+
+	// Get all pods
+	if k.pods != nil {
+		for _, obj := range k.pods.GetStore().List() {
+			if meta, ok := obj.(*model.ResourceMetaData); ok {
+				allResources = append(allResources, meta)
+			}
+		}
+	}
+
+	// Get all nodes
+	if k.nodes != nil {
+		for _, obj := range k.nodes.GetStore().List() {
+			if meta, ok := obj.(*model.ResourceMetaData); ok {
+				allResources = append(allResources, meta)
+			}
+		}
+	}
+
+	// Get all services
+	if k.services != nil {
+		for _, obj := range k.services.GetStore().List() {
+			if meta, ok := obj.(*model.ResourceMetaData); ok {
+				allResources = append(allResources, meta)
+			}
+		}
+	}
+
+	log.WithField("count", len(allResources)).Debug("Retrieved all resources for snapshot")
+	return allResources
 }
 
 func isServiceIPSet(ip string) bool {

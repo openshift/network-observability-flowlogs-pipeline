@@ -27,12 +27,18 @@ type Mock struct {
 func NewInformersMock() *Mock {
 	inf := new(Mock)
 	inf.On("InitFromConfig", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	inf.On("GetAllResources").Return([]*model.ResourceMetaData{})
 	return inf
 }
 
 func (o *Mock) InitFromConfig(kubeconfig string, infConfig *Config, opMetrics *operational.Metrics) error {
 	args := o.Called(kubeconfig, infConfig, opMetrics)
 	return args.Error(0)
+}
+
+func (o *Mock) GetAllResources() []*model.ResourceMetaData {
+	args := o.Called()
+	return args.Get(0).([]*model.ResourceMetaData)
 }
 
 type IndexerMock struct {
@@ -91,6 +97,21 @@ func (m *IndexerMock) MockPod(primaryIP, name, namespace, nodeIP, ownerName, own
 		res.IPs = []string{primaryIP}
 		m.On("ByIndex", IndexIP, primaryIP).Return([]interface{}{&res}, nil)
 	}
+}
+
+// MockPodsForIP registers several Pods sharing the same primary IP, so tests can
+// exercise IP contention between live and terminated Pods. Pods are returned by the
+// index in the given order.
+func (m *IndexerMock) MockPodsForIP(ip string, pods ...model.ResourceMetaData) {
+	objs := make([]interface{}, 0, len(pods))
+	for i := range pods {
+		p := pods[i]
+		p.Kind = "Pod"
+		p.IPs = []string{ip}
+		m.parentChecker(&p)
+		objs = append(objs, &p)
+	}
+	m.On("ByIndex", IndexIP, ip).Return(objs, nil)
 }
 
 func (m *IndexerMock) MockNode(ip, name string) {
@@ -236,4 +257,18 @@ func (f *FakeInformers) GetNodeByName(n string) (*model.ResourceMetaData, error)
 		return i, nil
 	}
 	return nil, errors.New("notFound")
+}
+
+func (f *FakeInformers) GetAllResources() []*model.ResourceMetaData {
+	var all []*model.ResourceMetaData
+	for _, v := range f.ipInfo {
+		all = append(all, v)
+	}
+	for _, v := range f.customKeysInfo {
+		all = append(all, v)
+	}
+	for _, v := range f.nodes {
+		all = append(all, v)
+	}
+	return all
 }

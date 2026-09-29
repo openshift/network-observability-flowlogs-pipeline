@@ -30,6 +30,9 @@ IMAGE_TAG_BASE ?= $(IMAGE_REGISTRY)/$(IMAGE_ORG)/flowlogs-pipeline
 # Image URL to use all building/pushing image targets
 IMAGE ?= $(IMAGE_TAG_BASE):$(VERSION)
 
+# Kubernetes namespace for deployments - defaults to current context namespace or "default"
+NAMESPACE ?= $(shell ns=$$(kubectl config view --minify --output 'jsonpath={..namespace}' 2>/dev/null); echo "$${ns:-default}")
+
 # Image building tool (docker / podman) - docker is preferred in CI
 OCI_BIN_PATH = $(shell which docker 2>/dev/null || which podman)
 OCI_BIN ?= $(shell basename ${OCI_BIN_PATH})
@@ -42,12 +45,24 @@ endif
 
 ifneq ($(CLEAN_BUILD),)
 	BUILD_DATE := $(shell date +%Y-%m-%d\ %H:%M)
-	BUILD_SHA := $(shell git rev-parse --short HEAD)
+	BUILD_SHA := $(shell git rev-parse --short=8 HEAD)
 	LDFLAGS ?= -X 'main.buildVersion=${VERSION}-${BUILD_SHA}' -X 'main.buildDate=${BUILD_DATE}'
 endif
 
-GOLANGCI_LINT_VERSION = v2.8.0
+GOLANGCI_LINT_VERSION = v2.12.2
 KIND_VERSION = v0.22.0
+PROTOC_VERSION = 36.2
+PROTOC_GEN_GO_VERSION = v1.36.11
+PROTOC_GEN_GO_GRPC_VERSION = v1.6.2
+
+# protoc is downloaded as a prebuilt release archive (it is not a Go tool).
+# The archive naming uses its own OS/arch spelling, hence the translations below.
+PROTOC_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]' | sed 's/darwin/osx/')
+PROTOC_ARCH := $(shell uname -m | sed 's/aarch64/aarch_64/; s/arm64/aarch_64/')
+# Extracted next to the binary so that protoc auto-resolves its bundled
+# well-known types (google/protobuf/*.proto) from <bindir>/../include.
+PROTOC_DIR = $(GOBIN)/protoc-$(PROTOC_VERSION)
+PROTOC = $(PROTOC_DIR)/bin/protoc
 
 FLP_BIN_FILE=flowlogs-pipeline
 CG_BIN_FILE=confgenerator
@@ -238,13 +253,31 @@ tar-image: image-build ## Build single arch (amd64) and save as a tar
 	$(OCI_BIN) tag $(IMAGE)-amd64 $(IMAGE)
 	mkdir -p ./out
 	$(OCI_BIN) save -o out/image.tar $(IMAGE)
-	echo $(IMAGE) > ./out/name
 
 .PHONY: goyacc
 goyacc: ## Regenerate filters query langage
 	@echo "### Regenerate filters query langage"
 	GOFLAGS="" go install golang.org/x/tools/cmd/goyacc@v0.32.0
 	goyacc -o pkg/dsl/expr.y.go pkg/dsl/expr.y
+
+.PHONY: prereqs-proto
+prereqs-proto: ## Download the pinned protoc and Go plugins into ./bin
+	@echo "### Checking protoc dependencies"
+	test -f $(PROTOC) || ( \
+		mkdir -p $(PROTOC_DIR) \
+		&& curl -sSfL https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOC_VERSION)/protoc-$(PROTOC_VERSION)-$(PROTOC_OS)-$(PROTOC_ARCH).zip -o $(PROTOC_DIR)/protoc.zip \
+		&& unzip -o -d $(PROTOC_DIR) $(PROTOC_DIR)/protoc.zip \
+		&& rm $(PROTOC_DIR)/protoc.zip )
+	GOOS=$$(go env GOHOSTOS) GOARCH=$$(go env GOHOSTARCH) GOFLAGS="" go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+	GOOS=$$(go env GOHOSTOS) GOARCH=$$(go env GOHOSTARCH) GOFLAGS="" go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+
+.PHONY: proto
+proto: prereqs-proto ## Regenerate protobuf/gRPC Go code
+	@echo "### Regenerate protobuf/gRPC Go code"
+	$(PROTOC) --go_out=./pkg/pipeline/write/grpc ./proto/genericmap.proto
+	$(PROTOC) --go-grpc_out=./pkg/pipeline/write/grpc ./proto/genericmap.proto
+	$(PROTOC) --go_out=./pkg/pipeline/transform/kubernetes/k8scache --go_opt=paths=source_relative -I ./proto k8scache.proto
+	$(PROTOC) --go-grpc_out=./pkg/pipeline/transform/kubernetes/k8scache --go-grpc_opt=paths=source_relative -I ./proto k8scache.proto
 
 include .mk/development.mk
 include .mk/shortcuts.mk
