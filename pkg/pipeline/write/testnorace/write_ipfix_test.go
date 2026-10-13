@@ -173,6 +173,7 @@ func TestIPFIXFlowWithEnterpriseID(t *testing.T) {
 		addFields      map[string]any
 		removeFields   []string
 		expectedFields []string
+		expectedUnset  []string
 	}{
 		{
 			name: "full flow",
@@ -181,13 +182,16 @@ func TestIPFIXFlowWithEnterpriseID(t *testing.T) {
 				"Flags": utils.DecodeTCPFlags(uint(fullPBFlow.Flags)),
 				// Add enrichment
 				"SrcK8S_Name":      "pod A",
+				"SrcK8S_Type":      "Pod",
 				"SrcK8S_Namespace": "ns1",
 				"SrcK8S_HostName":  "node1",
 				"DstK8S_Name":      "pod B",
+				"DstK8S_Type":      "Pod",
 				"DstK8S_Namespace": "ns2",
 				"DstK8S_HostName":  "node2",
 			},
 			expectedFields: slices.Concat(write.IPv4IANAFields, kubeFields, customNetworkFields, customNetworkFieldsV4),
+			expectedUnset:  []string{"sourceServiceName", "destinationServiceName"},
 		},
 		{
 			name: "IPv6 flow",
@@ -208,11 +212,35 @@ func TestIPFIXFlowWithEnterpriseID(t *testing.T) {
 			addFields: map[string]any{
 				// Partial enrichment
 				"SrcK8S_Name":      "pod A",
+				"SrcK8S_Type":      "Pod",
 				"SrcK8S_Namespace": "ns1",
 				"SrcK8S_HostName":  "node1",
 			},
 			removeFields:   []string{"TimeFlowRttNs"},
 			expectedFields: slices.Concat(write.IPv4IANAFields, kubeFields, customNetworkFields, customNetworkFieldsV4),
+			expectedUnset:  []string{"sourceServiceName", "destinationServiceName"},
+		},
+		{
+			name: "node flow",
+			addFields: map[string]any{
+				"Flags":           utils.DecodeTCPFlags(uint(fullPBFlow.Flags)),
+				"SrcK8S_Name":     "node1",
+				"SrcK8S_Type":     "Node",
+				"SrcK8S_HostName": "node1",
+			},
+			expectedFields: slices.Concat(write.IPv4IANAFields, kubeFields, customNetworkFields, customNetworkFieldsV4),
+			expectedUnset:  []string{"sourcePodName", "sourcePodNamespace", "sourceServiceName", "destinationServiceName"},
+		},
+		{
+			name: "service flow",
+			addFields: map[string]any{
+				"Flags":            utils.DecodeTCPFlags(uint(fullPBFlow.Flags)),
+				"DstK8S_Name":      "service A",
+				"DstK8S_Type":      "Service",
+				"DstK8S_Namespace": "ns1",
+			},
+			expectedFields: slices.Concat(write.IPv4IANAFields, kubeFields, customNetworkFields, customNetworkFieldsV4),
+			expectedUnset:  []string{"destinationPodName"},
 		},
 	}
 
@@ -271,7 +299,7 @@ func TestIPFIXFlowWithEnterpriseID(t *testing.T) {
 				element, _, exist := record.GetInfoElementWithValue(name)
 				assert.Truef(t, exist, "element '%s' is missing", name)
 				assert.NotNil(t, element, "element '%s' is nil", name)
-				matchElement(t, element, flow)
+				matchElement(t, element, flow, slices.Contains(tt.expectedUnset, name))
 			}
 		})
 	}
@@ -375,7 +403,7 @@ func TestIPFIXFlowWithoutEnterpriseID(t *testing.T) {
 				element, _, exist := record.GetInfoElementWithValue(name)
 				assert.Truef(t, exist, "element '%s' is missing", name)
 				assert.NotNil(t, element, "element '%s' is nil", name)
-				matchElement(t, element, flow)
+				matchElement(t, element, flow, false)
 			}
 			// Make sure enriched fields are absent
 			for _, f := range write.KubeFields {
@@ -436,7 +464,7 @@ func TestICMPIPFIXFlow(t *testing.T) {
 		element, _, exist := record.GetInfoElementWithValue(name)
 		assert.Truef(t, exist, "element with name %s should exist in the record", name)
 		assert.NotNil(t, element)
-		matchElement(t, element, flow)
+		matchElement(t, element, flow, false)
 	}
 
 	// Make sure enriched fields are absent
@@ -447,19 +475,22 @@ func TestICMPIPFIXFlow(t *testing.T) {
 	}
 }
 
-func matchElement(t *testing.T, element entities.InfoElementWithValue, flow config.GenericMap) {
+func matchElement(t *testing.T, element entities.InfoElementWithValue, flow config.GenericMap, expectedUnset bool) {
 	name := element.GetName()
 	mapping, ok := write.MapIPFIXKeys[name]
 	require.True(t, ok, "missing IPFIX key '%s'", name)
 	expected := flow[mapping.Key]
-	if mapping.Matcher != nil {
-		assert.True(t, mapping.Matcher(element, expected), "unexpected '%s'", name)
+	if expectedUnset {
+		value := mapping.Getter(element)
+		assert.Empty(t, value, "field '%s' with value '%v' found in record, despite explicitely listed as unexpected", name, value)
+	} else if mapping.Matcher != nil {
+		assert.True(t, mapping.Matcher(element, expected), "field '%s' expecting value '%v' does not satisfy the field matcher", name, expected)
 	} else {
 		value := mapping.Getter(element)
 		if expected == nil {
-			assert.Empty(t, value, "unexpected '%s'", name)
+			assert.Empty(t, value, "field '%s' with value '%v' found in record, despite implicitely unexpected", name, value)
 		} else {
-			assert.Equal(t, expected, value, "unexpected '%s'", name)
+			assert.Equal(t, expected, value, "field '%s' has unexpected value: want '%v', got '%v'", name, expected, value)
 		}
 	}
 }
@@ -559,8 +590,10 @@ func TestIngestEnriched(t *testing.T) {
 
 	// Add enrichment
 	flow["SrcK8S_Name"] = "pod A"
+	flow["SrcK8S_Type"] = "Pod"
 	flow["SrcK8S_Namespace"] = "ns1"
 	flow["DstK8S_Name"] = "pod B"
+	flow["DstK8S_Type"] = "Pod"
 	flow["DstK8S_Namespace"] = "ns2"
 
 	writer, err := write.NewWriteIpfix(config.StageParam{
