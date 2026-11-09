@@ -364,6 +364,7 @@ Following is the supported API format for writing to an IPFIX collector:
          transport: Transport protocol (tcp/udp) to be used for the IPFIX connection
          enterpriseId: Enterprise ID for exporting non-standard data
          tplSendInterval: Interval for resending templates to the collector (default: 1m)
+         pathMtu: Path MTU, used to bound the size of the exported IPFIX messages when transport is udp; ignored for tcp (default: 1400)
 </pre>
 ## Aggregate metrics API
 Following is the supported API format for specifying metrics aggregations:
@@ -409,7 +410,7 @@ Following is the supported API format for specifying connection tracking:
                  input: The input field to base the operation on. When omitted, 'name' is used
                  reportMissing: When true, missing input will produce MissingFieldError metric and error logs
          scheduling: list of timeouts and intervals to apply per selector
-                 selector: list of key-value pairs to match against connection fields to apply this scheduling. For backward compatibility, a key-value map is also accepted, but this form is deprecated because the keys get lower-cased.
+                 selector: list of key-value pairs to match against connection fields to apply this scheduling. For backward compatibility, a key-value map is also accepted, but this form is deprecated.
                          key: name of the field to look for in the flow
                          value: value of the field to look for in the flow
                  endConnectionTimeout: duration of time to wait from the last flow log to end a connection

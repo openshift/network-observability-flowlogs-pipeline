@@ -69,6 +69,23 @@ Flags:
 
 > Note: for API details refer to [docs/api.md](docs/api.md).
 > 
+## YAML configuration files
+
+FLP accepts YAML configuration files with `--config=/path/to/config.yaml`.
+Structured sections (`pipeline`, `parameters`, `metricsSettings`, and
+`dynamicParameters`) preserve case-sensitive map keys, such as flow field names
+and metric label mappings. Explicit command-line flags override environment
+variables, which override file values. Configuration keys used to set command-line
+flags must match the flag names' casing. Existing JSON files remain readable.
+Command option files for `flowlogs-pipeline` and `confgenerator` support YAML
+and JSON; without `--config`, each command searches the home directory for its
+default file name with one of those extensions.
+
+Dynamic configuration ConfigMaps also accept YAML, both at startup and on watch
+updates. Set `dynamicParameters.fileName` to the ConfigMap data key containing the
+configuration, for example `config.yaml`. Hot reload remains limited to the
+supported stage updates; changing static configuration requires a restart.
+
 ## Configuration generation
 
 flowlogs-pipeline network metrics configuration ( `--config` flag) can be generated automatically using 
@@ -228,11 +245,11 @@ parameters:
 
 2. Using command line parameters:
  
-`./flowlogs-pipeline --pipeline "[{\"name\":\"ingest1\"},{\"follows\":\"ingest1\",\"name\":\"write1\"}]" --parameters "[{\"ingest\":{\"file\":{\"filename\":\"hack/examples/ocp-ipfix-flowlogs.json\"},\"decoder\":{\"type\":\"json\"},\"type\":\"file\"},\"name\":\"ingest1\"},{\"name\":\"write1\",\"write\":{\"type\":\"stdout\"}}]"`
+`./flowlogs-pipeline --pipeline '[{"name":"ingest1"},{"follows":"ingest1","name":"write1"}]' --parameters '[{"ingest":{"file":{"filename":"hack/examples/ocp-ipfix-flowlogs.json","decoder":{"type":"json"}},"type":"file"},"name":"ingest1"},{"name":"write1","write":{"type":"stdout"}}]"'`
 
 Options included in the command line override the options specified in the config file.
 
-`flowlogs-pipeline --log-level debug --pipeline "[{\"name\":\"ingest1\"},{\"follows\":\"ingest1\",\"name\":\"write1\"}]" --config <configFile>`
+`./flowlogs-pipeline --log-level debug --pipeline '[{"name":"ingest_file"},{"follows":"ingest_file","name":"write_stdout"}]' --config <configFile>`
 
 Supported options are provided by running:
 
